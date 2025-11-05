@@ -1,35 +1,20 @@
 import streamlit as st
-import hashlib, time, json
+import hashlib
 
-
-st.title("Acta Digital — Import Test")
-
-st.write("✅ Librerías importadas:")
-st.code("streamlit, hashlib, time, json")
-
-
-
-# Función requerida
 def get_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-st.set_page_config(page_title="Acta Digital — Hash", layout="centered")
+st.set_page_config(page_title="Acta Digital — Hash Generator", layout="centered")
 st.title("Generador de hash SHA-256")
 
-st.caption("Escribe algo y verás su hash en tiempo real.")
+texto = st.text_input("Escribe algo para generar su hash", "")
 
-# Entrada de texto
-texto = st.text_input("Texto a hashear", "hola mundo")
-
-# Salida
 if texto.strip():
-    h = get_hash(texto)
-    st.subheader("Hash")
-    st.code(h)
-    st.write(f"Longitud: {len(h)} caracteres hexadecimales")
+    hash_resultado = get_hash(texto)
+    st.success("Hash generado correctamente:")
+    st.code(hash_resultado)
 else:
-    st.info("Escribe texto para calcular el hash.")
-
+    st.info("Introduce texto para calcular el hash.")
 
 
 st.write("Timestamp:", time.time())
