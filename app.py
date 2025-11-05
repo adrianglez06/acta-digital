@@ -1,186 +1,224 @@
+
 import streamlit as st
-import hashlib
-import time
-import json
-from pathlib import Path
-from datetime import datetime, timezone
+import hashlib, time, json
 
-# =========================
-# Utilidades de hashing
-# =========================
-def canonicalize_text(text: str) -> str:
-    # Normaliza saltos de línea y espacios para evitar hashes distintos por formato
-    return "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")).strip()
+import re
+import os
 
-def get_hash_bytes(b: bytes) -> str:
-    return hashlib.sha256(b).hexdigest()
+
+
+
+# -------------------------------
+
+# Prompt 4 — Interfaz de registro (mejorada)
+
+# -------------------------------
+
+
+
+import os
+
+import re
+
+
+
+def normalize_text(s: str) -> str:
+
+  if not s:
+
+    return ""
+
+  # Normaliza saltos de línea y espacios accidentales
+
+  s = s.replace("\r\n", "\n").replace("\r", "\n")
+
+  return s.strip()
+
+
 
 def get_hash(text: str) -> str:
-    return get_hash_bytes(canonicalize_text(text).encode("utf-8"))
 
-# =========================
-# Almacenamiento tipo "cadena"
-# =========================
-LEDGER = Path("ledger.jsonl")
+  text = normalize_text(text)
 
-def read_last_record():
-    if not LEDGER.exists():
-        return None
-    with LEDGER.open("rb") as f:
-        f.seek(0, 2)
-        size = f.tell()
-        if size == 0:
-            return None
-        # Lee hacia atrás hasta encontrar el salto de línea anterior
-        chunk = 4096
-        data = b""
-        pos = size
-        while pos > 0:
-            read_size = chunk if pos >= chunk else pos
-            pos -= read_size
-            f.seek(pos)
-            data = f.read(read_size) + data
-            if b"\n" in data:
-                lines = data.rstrip(b"\n").split(b"\n")
-                last = lines[-1]
-                try:
-                    return json.loads(last.decode("utf-8"))
-                except Exception:
-                    return None
-        # Si solo hay una línea sin \n final
-        try:
-            return json.loads(data.decode("utf-8"))
-        except Exception:
-            return None
+  return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-def append_record(record: dict):
-    with LEDGER.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-def verify_ledger():
-    if not LEDGER.exists():
-        return True, 0, None
-    ok = True
-    count = 0
-    prev_id = None
-    bad_msg = None
-    with LEDGER.open("r", encoding="utf-8") as f:
-        for i, line in enumerate(f, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                ok = False
-                bad_msg = f"Línea {i}: JSON inválido"
-                break
-            # Recalcular id esperado
-            payload = {
-                "owner": rec.get("owner", ""),
-                "content": canonicalize_text(rec.get("content", "")),
-                "time": rec.get("time"),
-                "prev_id": rec.get("prev_id"),
-            }
-            expected_id = get_hash_bytes(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"))
-            if rec.get("id") != expected_id:
-                ok = False
-                bad_msg = f"Línea {i}: id no coincide con el contenido"
-                break
-            if rec.get("prev_id") != prev_id:
-                ok = False
-                bad_msg = f"Línea {i}: prev_id no encadena con el registro anterior"
-                break
-            prev_id = rec.get("id")
-            count += 1
-    return ok, count, bad_msg
 
-# =========================
-# App Streamlit
-# =========================
-st.set_page_config(page_title="Registro de Documentos Digitales", layout="centered")
-st.title("Registro de Documentos Digitales")
+def is_hex64(s: str) -> bool:
 
-# Verificación de integridad
-ok, total, error_msg = verify_ledger()
-st.caption(f"Estado del ledger: {'OK' if ok else 'CORRUPTO'} | Registros: {total}")
-if not ok:
-    st.error(error_msg)
+  return bool(re.fullmatch(r"[0-9a-fA-F]{64}", (s or "").strip()))
 
-# Formulario de alta
-st.subheader("Nuevo registro")
-owner = st.text_input("Propietario")
-content = st.text_area("Contenido del documento", height=200, placeholder="Pega el contenido exacto que quieres anclar")
-if st.button("Registrar", type="primary"):
-    if not owner.strip():
-        st.error("Propietario vacío. Rellénalo.")
-    elif not content.strip():
-        st.error("Contenido vacío. Rellénalo.")
+
+
+# Init ledger en sesión (append-only)
+
+if "ledger" not in st.session_state:
+
+  st.session_state["ledger"] = []  # cada item: {"owner","content_hash","time"}
+
+
+
+st.title("🧾 Registro de Documentos Digitales")
+
+
+
+owner  = st.text_input("Propietario")
+
+content = st.text_area("Contenido del documento")
+
+
+
+colA, colB = st.columns([1,1])
+
+
+
+with colA:
+
+  if st.button("🔐 Calcular hash"):
+
+    if not content:
+
+      st.warning("Escribe contenido antes de calcular el hash.")
+
     else:
-        ts = time.time()
-        iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-        norm_content = canonicalize_text(content)
-        # Encadenado: cada registro referencia el id anterior
-        last = read_last_record()
-        prev_id = last["id"] if last else None
-        payload = {
-            "owner": owner.strip(),
-            "content": norm_content,
-            "time": ts,
-            "prev_id": prev_id,
-        }
-        rec_id = get_hash_bytes(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"))
-        record = {
-            "id": rec_id,
-            "owner": payload["owner"],
-            "content": payload["content"],
-            "time": ts,
-            "time_iso": iso,
-            "prev_id": prev_id,
-            "algo": "sha256",
-        }
-        append_record(record)
-        st.success("Documento registrado con éxito")
-        st.write("ID del registro")
-        st.code(rec_id)
-        st.write("Prueba independiente del contenido")
-        st.code(get_hash(content))
 
-st.divider()
+      h = get_hash(content)
 
-# Generador de hash simple
-st.subheader("Generar hash de un texto")
-sample = st.text_input("Texto a hashear", "")
-if sample.strip():
-    st.code(get_hash(sample))
+      st.session_state["hash_actual"] = h
 
-st.divider()
+      st.info("Hash calculado (SHA-256) del TEXTO, no del hash:")
 
-# Últimos registros
-st.subheader("Últimos registros")
-if LEDGER.exists() and LEDGER.stat().st_size > 0:
-    with LEDGER.open("r", encoding="utf-8") as f:
-        lines = [json.loads(x) for x in f if x.strip()]
-    if lines:
-        for rec in lines[-10:][::-1]:
-            st.write(f"ID: {rec['id']}")
-            st.write(f"Propietario: {rec['owner']}")
-            st.write(f"Fecha (UTC): {rec['time_iso']}")
-            st.write("Contenido:")
-            st.code(rec["content"])
-            st.caption(f"prev_id: {rec['prev_id']}")
-            st.write("---")
+      st.code(h, language="text")
+
+
+
+with colB:
+
+  if st.button("🧩 Registrar (append-only)"):
+
+    if not owner:
+
+      st.warning("Indica el propietario.")
+
+    elif not content:
+
+      st.warning("Escribe el contenido del documento.")
+
     else:
-        st.info("No hay registros.")
-else:
-    st.info("Aún no existe el ledger.")
 
-# Descarga del ledger
-if LEDGER.exists():
-    st.download_button(
-        label="Descargar ledger.jsonl",
-        data=LEDGER.read_bytes(),
-        file_name="ledger.jsonl",
-        mime="application/json",
-    )
+      h = get_hash(content)
 
+      ts = time.time()
+
+      record = {"owner": owner, "content_hash": h, "time": ts}
+
+
+
+      # 1) Añadir a ledger en memoria (persistente durante la sesión)
+
+      st.session_state["ledger"].append(record)
+
+
+
+      # 2) Escribir en archivo local como JSON Lines (no persistente en la nube)
+
+      #  Útil para descargar; cada línea es un registro independiente.
+
+      try:
+
+        with open("blockchain.jsonl", "a", encoding="utf-8") as f:
+
+          f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        wrote_file = True
+
+      except Exception as e:
+
+        wrote_file = False
+
+        st.warning(f"No se pudo escribir archivo local: {e}")
+
+
+
+      st.success("Documento registrado con éxito ✅")
+
+      st.write("**Propietario:**", owner)
+
+      st.write("**Timestamp:**", ts, f"({time.ctime(ts)})")
+
+      st.write("**Hash (SHA-256):**")
+
+      st.code(h, language="text")
+
+
+
+# ---- Tabla de registros (sesión) ----
+
+if st.session_state["ledger"]:
+
+  st.subheader("📚 Registros en esta sesión")
+
+  st.dataframe(st.session_state["ledger"], use_container_width=True)
+
+
+
+  # Descarga del ledger de sesión como JSONL (fiable en Streamlit Cloud)
+
+  jsonl_bytes = "\n".join(json.dumps(r, ensure_ascii=False) for r in st.session_state["ledger"]).encode("utf-8")
+
+  st.download_button(
+
+    "⬇️ Descargar ledger (JSONL)",
+
+    data=jsonl_bytes,
+
+    file_name="ledger_session.jsonl",
+
+    mime="application/json"
+
+  )
+
+
+
+# ---- Verificación rápida (Texto ↔ Hash) ----
+
+st.subheader("🔍 Verificar integridad (Texto ↔ Hash)")
+
+texto_verificar = st.text_area("Texto a verificar:")
+
+hash_verificar = st.text_input("Hash original (64 hex):",
+
+                value=st.session_state.get("hash_actual",""))
+
+
+
+if st.button("Verificar texto vs hash"):
+
+  if not texto_verificar:
+
+    st.warning("Introduce el texto a verificar.")
+
+  elif not is_hex64(hash_verificar):
+
+    st.warning("Introduce un hash válido de 64 caracteres hexadecimales.")
+
+  else:
+
+    hash_calculado = get_hash(texto_verificar)
+
+    st.write("Hash calculado del texto:")
+
+    st.code(hash_calculado, language="text")
+
+    if hash_calculado.lower() == hash_verificar.lower():
+
+      st.success("🎯 Coincide: el texto es íntegro.")
+
+    else:
+
+      st.error("⚠️ No coincide: el texto fue modificado o el hash es distinto.")
+
+
+
+st.write("Timestamp:", time.time())
+st.write("Ejemplo JSON:", json.dumps({"ok": True, "msg": "listo"}))
