@@ -220,5 +220,4 @@ if st.button("Verificar texto vs hash"):
 
 
 
-st.write("Timestamp:", time.time())
-st.write("Ejemplo JSON:", json.dumps({"ok": True, "msg": "listo"}))
+
